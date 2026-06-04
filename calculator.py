@@ -109,3 +109,51 @@ def render_starforce_simulator():
                         st.markdown("**📊 필요 예산 리스크 게이지**")
                         st.progress(0.7) # 시각적 긴장감을 주는 70% 고정 바
                         st.caption("우측으로 갈수록(하위 10%에 걸릴수록) 파산 및 멘탈 붕괴의 위험이 기하급수적으로 증가합니다.")
+
+
+# 주간 보스 결정석 가격표 (난이도 내림차순 정렬, 단위: 메소)
+# ※ 학부 프로젝트용 임의 근사치 데이터입니다.
+BOSS_CRYSTAL_PRICES = {
+    "검은 마법사": 1000000000,
+    "세렌": 700000000,
+    "진 힐라": 400000000,
+    "더스크": 350000000,
+    "듄켈": 330000000,
+    "윌": 300000000,
+    "루시드": 250000000,
+    "데미안": 170000000,
+    "스우": 160000000,
+    "가디언 엔젤 슬라임": 150000000,
+    "벨룸": 24000000,
+    "매그너스": 21000000,
+    "반반": 19000000,
+    "피에르": 19000000,
+    "블러디 퀸": 19000000,
+    "자쿰": 18000000,
+    "핑크빈": 14000000
+}
+
+def calculate_weekly_boss_income(achievement_data):
+    """
+    유저의 업적 데이터를 분석하여 주간 보스 12마리의 결정석 총 수익을 계산합니다.
+    """
+    if not achievement_data or 'achievements' not in achievement_data:
+        return 0
+
+    # 넥슨 API에서 넘어온 업적 이름들을 전부 하나의 리스트로 추출
+    achieved_names = [ach.get('achievement_name', '') for ach in achievement_data['achievements']]
+    
+    possible_boss_prices = []
+    
+    # 1. 유저의 업적에 보스 이름이 포함되어 있다면 격파한 것으로 간주하고 가격을 저장
+    for boss_name, price in BOSS_CRYSTAL_PRICES.items():
+        if any(boss_name in ach_name for ach_name in achieved_names):
+            possible_boss_prices.append(price)
+            
+    # 2. 가격을 내림차순(비싼 순서대로) 정렬
+    possible_boss_prices.sort(reverse=True)
+    
+    # 3. 주간 보스 제한인 '최상위 12마리'의 가격만 추려서 합산
+    top_12_income = sum(possible_boss_prices[:12])
+    
+    return top_12_income

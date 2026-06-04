@@ -35,6 +35,8 @@ def get_character_stat(api_key, ocid, date=None):
     else:
         print(f"스탯 조회 실패: {response.status_code}")
         return None
+    
+
 
 def get_character_equipment(api_key, ocid, date=None):
     """
@@ -70,4 +72,23 @@ def get_character_basic(api_key, ocid, date=None):
         return response.json()
     else:
         print(f"기본 정보 조회 실패: {response.status_code}")
+        return None
+
+# api_utils.py 맨 아래에 추가
+def get_character_achievement(api_key, ocid, date=None):
+    """
+    OCID를 사용하여 캐릭터의 업적 정보를 조회합니다.
+    이를 통해 최초 보스 격파 기록을 확인합니다.
+    """
+    url = f"{BASE_URL}/character/achievement?ocid={ocid}"
+    if date:
+        url += f"&date={date}"
+        
+    headers = {"x-nxopen-api-key": api_key}
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"업적 조회 실패: {response.status_code}")
         return None

@@ -184,88 +184,101 @@ with col2:
             st.warning("조회할 캐릭터 닉네임을 입력해 주세요.")
         else:
             with st.spinner(f"'{character_name}'님의 정보를 찾는 중..."):
-                cached_data = db_utils.get_character_cache(character_name)
+                cached_data = db_utils.get_user_by_nickname(character_name)
                 use_cache = False
                 
+                # 1. DB에 최근 검색 기록이 있는지 확인 (캐시 검증)
                 if cached_data:
                     updated_time = pd.to_datetime(cached_data['updated_at'])
                     current_time = datetime.now(updated_time.tzinfo)
-                    if current_time - updated_time < timedelta(days=7):
+                    
+                    stats_data = cached_data.get('stats_data', {})
+                    basic_info = stats_data.get('basic', {}) if isinstance(stats_data, dict) else {}
+                    is_data_valid = bool(basic_info.get('character_image')) 
+                    
+                    if (current_time - updated_time < timedelta(days=7)) and is_data_valid:
                         use_cache = True
                         st.success(f"✨ '{character_name}'님의 최근 기록을 DB에서 찾았습니다!")
                         
-                        basic_data = cached_data.get('stats_data', {}).get('basic', {})
-                        equip_data = cached_data.get('equip_data', {}) 
-                        
-                        if cached_data.get('users') and cached_data['users'].get('api_key'):
-                            st.session_state.api_key = cached_data['users']['api_key']
-                        
-                        st.session_state.user_id = cached_data['user_id']
-                        st.session_state.character_id = cached_data['character_id']
+                        # 🚀 [수정 핵심 1] 캐시에서 데이터 꺼내기 (이름 통일)
+                        basic_data = basic_info
+                        # DB 버전에 상관없이 장비 데이터를 안전하게 가져오도록 수정
+                        equip_data = cached_data.get('equip_data', cached_data.get('equipment_data', {})) 
+                        achieve_data = stats_data.get('achievement', {})
+                    else:
+                        use_cache = False
                 
+                # 2. 캐시가 없거나 만료되었으면 넥슨 API 직접 호출
                 if not use_cache:
                     if not api_key:
-                        st.error("❌ 신규 검색입니다. API Key를 입력해 주세요.")
+                        st.error("❌ API Key를 입력해 주세요.")
                         st.stop()
                     
                     st.info("🔄 넥슨 서버와 통신합니다...")
                     ocid = api_utils.get_ocid(api_key, character_name)
                     if ocid:
+                        # 🚀 [수정 핵심 2] API에서 데이터 꺼내기 (이름 통일)
                         basic_data = api_utils.get_character_basic(api_key, ocid)
                         stat_data = api_utils.get_character_stat(api_key, ocid)
                         equip_data = api_utils.get_character_equipment(api_key, ocid)
+                        achieve_data = api_utils.get_character_achievement(api_key, ocid)
                         
                         if basic_data and stat_data and equip_data:
-                            user_id = db_utils.get_or_create_user(api_key)
-                            combined_stats = {"basic": basic_data, "stat": stat_data}
-                            
-                            char_record = db_utils.upsert_character_cache(user_id, character_name, combined_stats, equip_data)
-                            
-                            st.session_state.api_key = api_key 
-                            st.session_state.user_id = user_id
-                            st.session_state.character_id = char_record['character_id']
+                            # DB에 최신 데이터 캐싱 저장
+                            db_utils.upsert_user_cache(api_key, character_name, 
+                                {"basic": basic_data, "stat": stat_data, "achievement": achieve_data}, 
+                                equip_data)
                         else:
                             st.error("데이터 로드 실패.") ; st.stop()
                     else:
                         st.error("캐릭터를 찾을 수 없습니다.") ; st.stop()
 
+                # 🚀 [수정 핵심 3] 어디서 가져왔든, 하나로 통일된 achieve_data로 보스 수익 계산!
+                auto_boss_income = calculator.calculate_weekly_boss_income(achieve_data)
+
+                # --- 여기서부터 장비 분석 로직 시작 ---
                 equipment_list = equip_data.get("item_equipment", [])
                 all_ui_items = []    
                 analyzed_items = []  
+                potential_score_map = {"레전드리": 40, "유니크": 30, "에픽": 20, "레어": 10, "없음": 0}
 
                 for item in equipment_list:
-                    slot_name = item.get("item_equipment_slot", "") 
-                    part_name = item.get("item_equipment_part", "알 수 없음")
-                    part = slot_name if slot_name else part_name 
+                    # 🚀 [핵심 수정 포인트] item_equipment_part -> item_equipment_slot 으로 변경!
+                    # 이제 '두손검'이 아니라 '무기'로, '반지'가 아니라 '반지1', '반지2'로 정확히 가져옵니다.
+                    part = item.get("item_equipment_slot", item.get("item_equipment_part", "알 수 없음"))
                     
                     item_name = item.get("item_name", "알 수 없음")
-                    icon = item.get("item_icon", item.get("item_shape_icon", "")) 
+                    icon = item.get("item_icon", item.get("item_shape_icon", ""))
                     starforce = int(item.get("starforce", 0))
                     potential = item.get("potential_option_grade", "없음")
+                    add_potential = item.get("additional_potential_option_grade", "없음")
                     
-                    ui_item = {"part": part, "part_name": part_name, "name": item_name, "starforce": starforce, "potential": potential, "icon": icon}
+                    ui_item = {"part": part, "name": item_name, "starforce": starforce, "potential": potential, "icon": icon}
                     all_ui_items.append(ui_item)
                     
-                    seed_rings = ["리스트레인트", "컨티뉴어스", "웨폰퍼프", "리스크테이커", "크라이시스", "레벨퍼프", "링 오브 썸", "듀라빌리티"]
-                    is_seed_ring = any(ring in item_name for ring in seed_rings)
-                    
-                    if part in ["훈장", "포켓 아이템", "뱃지"] or is_seed_ring:
-                        continue
+                    if part in ["훈장", "포켓 아이템", "뱃지"]: continue
 
-                    final_score = calculate_custom_score(item)
+                    base_score = (starforce * 10) + potential_score_map.get(potential, 0) + (potential_score_map.get(add_potential, 0) * 0.5)
+                    # 이제 '무기', '보조무기'를 정확히 인식하므로 가중치(1.5배) 부여 로직도 완벽하게 작동합니다!
+                    final_score = base_score * 1.5 if part in ["무기", "보조무기", "엠블렘"] else base_score
+                        
                     analyzed_items.append({**ui_item, "score": final_score})
 
                 analyzed_items.sort(key=lambda x: x["score"], reverse=True)
+                # ------------------------------------
 
+                # 세션에 최종 저장
                 st.session_state.char_data = {
-                    "level": basic_data.get("character_level", 0),
-                    "class": basic_data.get("character_class", "알 수 없음"),
-                    "image": basic_data.get("character_image", ""), 
-                    "all_ui_items": all_ui_items, 
-                    "analyzed_items": analyzed_items
+                    "name": character_name, 
+                    "image": basic_data.get("character_image", "") if basic_data else "",
+                    "level": basic_data.get("character_level", 0) if basic_data else 0,
+                    "class": basic_data.get("character_class", "알 수 없음") if basic_data else "알 수 없음",
+                    "all_ui_items": all_ui_items,
+                    "analyzed_items": analyzed_items,
+                    "boss_income": auto_boss_income # 보스 수익 세션 등록
                 }
                 st.session_state.current_view = 'dashboard'
-                st.rerun() 
+                st.rerun()
 
 # ---------------------------------------------------------------------
 # --- 🖥️ 4. 결과 렌더링 영역 ---
@@ -353,93 +366,118 @@ if st.session_state.char_data:
         strong_names = [item['name'] for item in st.session_state.char_data['analyzed_items'][:3]]
         weak_names = [item['name'] for item in st.session_state.char_data['analyzed_items'][-3:]]
 
-        def render_slot(part_keywords, label, row, col):
-            if isinstance(part_keywords, str): 
-                part_keywords = [part_keywords]
+        # 🚀 1. 가장 최신 버전의 완벽한 render_slot 함수를 한 번만 선언합니다.
+        def render_slot(part_keywords, label, col, row):
+            if isinstance(part_keywords, str): part_keywords = [part_keywords]
+            matches = [i for i in st.session_state.char_data['all_ui_items'] if i['part'] in part_keywords]
+            item = matches[0] if matches else None
             
-            item = None
-            for k in part_keywords:
-                for i in st.session_state.char_data['all_ui_items']:
-                    if i['part'] == k:
-                        item = i
-                        break
-                if item: break
-            
-            if not item:
-                for k in part_keywords:
-                    for i in st.session_state.char_data['all_ui_items']:
-                        if k in i['part'] or k in i.get('part_name', ''):
-                            if k == '무기' and '보조' in i['part']: continue 
-                            if k == '펜던트' and '2' in i['part']: continue 
-                            item = i
-                            break
-                    if item: break
-
-            grid_style = f"grid-row: {row}; grid-column: {col};"
+            pos_style = f"grid-column: {col}; grid-row: {row};"
             
             if not item or not item.get("icon"):
-                return f'<div class="eq-slot empty-slot" style="{grid_style}"><div class="part-label">{label}</div></div>'
+                return f'<div class="eq-slot empty-slot" style="{pos_style}"><div class="part-label">{label}</div></div>'
             
             classes = ["eq-slot"]
-            if item['potential'] == "레전드리": classes.append("border-legendary")
-            elif item['potential'] == "유니크": classes.append("border-unique")
-            elif item['potential'] == "에픽": classes.append("border-epic")
-            elif item['potential'] == "레어": classes.append("border-rare")
+            pot = item.get('potential', '없음')
+            if pot == "레전드리": classes.append("border-legendary")
+            elif pot == "유니크": classes.append("border-unique")
+            elif pot == "에픽": classes.append("border-epic")
+            elif pot == "레어": classes.append("border-rare")
             
             if item['name'] in strong_names: classes.append("aura-strong")
             elif item['name'] in weak_names: classes.append("aura-weak")
             
-            star_html = f'<div class="star-label">★{item["starforce"]}</div>' if item["starforce"] > 0 else ""
-            img_html = f'<img src="{item["icon"]}">'
+            star = item.get("starforce", 0)
+            star_html = f'<div class="star-label">★{star}</div>' if star > 0 else ""
+            img_html = f'<img src="{item["icon"]}" alt="{label}">'
             
-            return f'<div class="{" ".join(classes)}" style="{grid_style}" title="{item["name"]} ({item["potential"]})">{star_html}{img_html}</div>'
+            return f'<div class="{" ".join(classes)}" style="{pos_style}" title="{item["name"]} ({pot})">{star_html}{img_html}</div>'
 
-        dashboard_col1, dashboard_col2 = st.columns([1.2, 1])
+        
+        # ---------------------------------------------------------
+        # 화면을 좌우로 분할
+        dashboard_col1, dashboard_col2 = st.columns([1, 1])
 
+        # 좌측: 메이플 오리지널 장비창 UI
         with dashboard_col1:
             char_img_url = st.session_state.char_data.get('image', '')
-            char_html = f'<img src="{char_img_url}">' if char_img_url else '<div class="part-label">캐릭터</div>'
-
-            html_parts = []
-            html_parts.append('<div class="eq-grid">')
             
-            html_parts.append(render_slot(['반지1'], '반지1', 1, 1))
-            html_parts.append(render_slot(['얼굴장식'], '얼굴장식', 1, 2))
-            html_parts.append(f'<div class="char-image-box" style="grid-row: 1 / 5; grid-column: 3 / 6;">{char_html}</div>')
-            html_parts.append(render_slot(['모자'], '모자', 1, 6))
-            html_parts.append(render_slot(['망토'], '망토', 1, 7))
+            # 🚀 2. CSS 뼈대 (엑셀 구조에 맞춰 7열 6행으로 확장하고 캐릭터를 대폭 키웠습니다!)
+            html_content = f"""
+            <style>
+            .eq-grid-authentic {{
+                display: grid;
+                /* 🚀 7개의 열(Column) 생성! */
+                grid-template-columns: repeat(7, 52px);
+                grid-template-rows: repeat(6, 52px);
+                gap: 6px; justify-content: center; margin: 15px auto;
+            }}
+            .char-center {{
+                /* 🚀 캐릭터가 3~5열(가로 3칸) / 1~4행(세로 4칸)을 넓게 차지합니다! */
+                grid-column: 3 / span 3; 
+                grid-row: 1 / span 4; 
+                display: flex; align-items: center; justify-content: center;
+            }}
+            .char-center img {{
+                /* 🚀 공간이 넓어진 만큼 캐릭터 높이를 240px로 대폭 확대! */
+                max-height: 240px; max-width: 100%; object-fit: contain;
+                filter: drop-shadow(0 0 10px rgba(255,255,255,0.25));
+            }}
+            .eq-grid-authentic .eq-slot {{
+                width: 100%; height: 100%; background-color: rgba(20, 24, 34, 0.9);
+                border: 1px solid #3a3f50; border-radius: 4px; position: relative; 
+                display: flex; align-items: center; justify-content: center;
+            }}
+            .eq-grid-authentic .empty-slot {{ background-color: transparent; border: 1px dashed #3a3f50; }}
+            .eq-grid-authentic .part-label {{ font-size: 10px; color: #555; font-weight: bold; text-align: center; }}
+            .eq-grid-authentic img {{ max-width: 90%; max-height: 90%; object-fit: contain; z-index: 2; }}
+            .star-label {{
+                position: absolute; top: -7px; left: 50%; transform: translateX(-50%);
+                font-size: 10px; color: #FFD700; text-shadow: 1px 1px 1px #000; z-index: 3; font-weight: bold;
+                white-space: nowrap;
+            }}
+            </style>
+            <div class="eq-grid-authentic">
+                <div class="char-center"><img src="{char_img_url}" alt="Character"></div>
+            """
             
-            html_parts.append(render_slot(['반지2'], '반지2', 2, 1))
-            html_parts.append(render_slot(['눈장식'], '눈장식', 2, 2))
-            html_parts.append(render_slot(['상의', '한벌옷'], '상의', 2, 6))
-            html_parts.append(render_slot(['장갑'], '장갑', 2, 7))
+            # 🚀 3. 기획자님이 주신 7x6 엑셀 좌표 완벽 매핑
+            slots = [
+                # 1행
+                ('반지1', '반지1', 1, 1), ('얼굴장식', '얼장', 2, 1), 
+                # (3, 4, 5열 1~4행은 캐릭터가 차지)
+                ('모자', '모자', 6, 1), ('망토', '망토', 7, 1),
+                
+                # 2행
+                ('반지2', '반지2', 1, 2), ('눈장식', '눈장식', 2, 2), 
+                (['상의', '한벌옷'], '상의', 6, 2), ('장갑', '장갑', 7, 2),
+                
+                # 3행
+                ('반지3', '반지3', 1, 3), ('귀고리', '귀고리', 2, 3), 
+                ('하의', '하의', 6, 3), ('신발', '신발', 7, 3),
+                
+                # 4행
+                ('반지4', '반지4', 1, 4), ('펜던트', '펜던트1', 2, 4), 
+                ('어깨장식', '견장', 6, 4), ('훈장', '훈장', 7, 4),
+                
+                # 5행 (🚀 대망의 무기, 보조무기, 엠블렘 라인!)
+                ('벨트', '벨트', 1, 5), ('펜던트2', '펜던트2', 2, 5), 
+                ('무기', '무기', 3, 5), ('보조무기', '보조', 4, 5), ('엠블렘', '엠블렘', 5, 5), 
+                ('안드로이드', '안드', 6, 5), (['기계 심장', '심장'], '심장', 7, 5),
+                
+                # 6행
+                ('포켓 아이템', '포켓', 1, 6), ('빈공간', '', 2, 6), 
+                # (3, 4, 5, 6열은 엑셀 설계대로 비워둡니다)
+                ('빈공간', '', 6, 6), ('뱃지', '뱃지', 7, 6)
+            ]
             
-            html_parts.append(render_slot(['반지3'], '반지3', 3, 1))
-            html_parts.append(render_slot(['귀고리', '귀걸이'], '귀걸이', 3, 2))
-            html_parts.append(render_slot(['하의'], '하의', 3, 6))
-            html_parts.append(render_slot(['신발'], '신발', 3, 7))
+            # 🚀 4. 리스트를 돌면서 HTML 조립 후 출력
+            for part, label, col, row in slots:
+                html_content += render_slot(part, label, col, row)
+                
+            html_content += "</div>"
+            st.markdown(html_content, unsafe_allow_html=True)
             
-            html_parts.append(render_slot(['반지4'], '반지4', 4, 1))
-            html_parts.append(render_slot(['펜던트', '펜던트1'], '펜던트1', 4, 2))
-            html_parts.append(render_slot(['어깨장식'], '어깨장식', 4, 6))
-            html_parts.append(render_slot(['훈장'], '훈장', 4, 7))
-            
-            html_parts.append(render_slot(['벨트'], '벨트', 5, 1))
-            html_parts.append(render_slot(['펜던트2'], '펜던트2', 5, 2))
-            html_parts.append(render_slot(['무기'], '무기', 5, 3))
-            html_parts.append(render_slot(['보조무기', '보조 무기'], '보조무기', 5, 4))
-            html_parts.append(render_slot(['엠블렘'], '엠블렘', 5, 5))
-            html_parts.append('<div class="eq-slot empty-slot" style="grid-row: 5; grid-column: 6;"><div class="part-label">안드로이드</div></div>')
-            html_parts.append(render_slot(['기계 심장', '심장'], '하트', 5, 7))
-            
-            html_parts.append(render_slot(['포켓 아이템'], '포켓', 6, 1))
-            html_parts.append('<div class="empty-span-box" style="grid-row: 6; grid-column: 2 / 7; border: 1px dashed #444; border-radius: 4px;"></div>')
-            html_parts.append(render_slot(['뱃지'], '뱃지', 6, 7))
-            
-            html_parts.append('</div>')
-            
-            st.markdown("".join(html_parts), unsafe_allow_html=True)
-
         with dashboard_col2:
             st.markdown("### 🔍 정밀 스펙 분석 리포트")
             st.write("잠재능력 수치(%)와 공/마를 실제 효율로 환산하여 분석한 결과입니다.")
@@ -494,7 +532,7 @@ if st.session_state.char_data:
         ).transform_filter(alt.datum.일요일)
 
         chart = (rules + line + points).properties(height=350).interactive()
-        st.altair_chart(chart, width="stretch")
+        st.altair_chart(chart, use_container_width=True)
         
         st.write("")
         col1, col2, col3 = st.columns(3)
@@ -509,52 +547,154 @@ if st.session_state.char_data:
         st.subheader("🔄 스펙업 가성비 시뮬레이터")
         st.markdown("경매장에서 본 아이템의 정보와 나의 플레이 타임을 입력하여 **정확한 소요 주차와 회수율**을 진단해 보세요.")
         
-        sim_col1, sim_col2 = st.columns(2)
+        sim_col1, sim_col2 = st.columns([1.2, 1])
         
         with sim_col1:
             st.markdown("#### 🛍️ 구매 희망 아이템 정보")
-            with st.form("item_sim_form"):
-                target_part = st.selectbox("장착 부위", ["무기", "보조무기", "엠블렘", "모자", "상의", "하의", "신발", "장갑", "망토", "어깨장식", "반지", "펜던트", "얼굴장식", "눈장식", "귀고리", "벨트", "심장"])
-                target_item_name = st.text_input("아이템 이름", placeholder="예: 17성 레전드리 앱솔랩스 무기")
-                target_price_eok = st.number_input("경매장 가격 (억 메소)", min_value=0.0, step=1.0, value=15.0, format="%.2f")
-                trades_left = st.slider("남은 가위 횟수 (거래 가능 횟수)", min_value=0, max_value=10, value=10)
-                calc_btn = st.form_submit_button("가성비 및 회수율 계산", width="stretch")
+            
+            main_category = st.selectbox("1. 아이템 종류 선택", ["방어구", "장신구", "무기", "보조무기", "엠블렘", "기계 심장"])
+
+            sub_category_options = []
+            item_name_options = []
+
+            if main_category == "방어구":
+                sub_category_options = ["모자", "상의", "하의", "한벌옷", "신발", "장갑", "망토", "어깨장식(견장)"]
+                item_name_options = ["앱솔랩스", "아케인셰이드", "에테르넬", "카루타(루타비스)", "여명"]
+            elif main_category == "장신구":
+                sub_category_options = ["반지", "펜던트", "얼굴장식", "눈장식", "귀고리", "벨트"]
+                item_name_options = ["보스 장신구", "여명의 보스 장신구", "칠흑의 보스 장신구", "마이스터", "이벤트 링"]
+            elif main_category == "무기":
+                sub_category_options = ["무기"]
+                item_name_options = ["앱솔랩스", "아케인셰이드", "제네시스", "파프니르"]
+            elif main_category == "보조무기":
+                sub_category_options = ["보조무기"]
+                item_name_options = ["블랙", "은빛", "루인 포스실드", "기타 보조무기"]
+            elif main_category == "엠블렘":
+                sub_category_options = ["엠블렘"]
+                item_name_options = ["골드", "미트라", "기타 엠블렘"]
+            elif main_category == "기계 심장":
+                sub_category_options = ["기계 심장"]
+                item_name_options = ["페어리 하트", "티타늄 하트", "블랙 하트", "리튬 하트"]
+
+            c1, c2 = st.columns(2)
+            with c1:
+                sub_category = st.selectbox("2. 상세 부위 선택", sub_category_options)
+            with c2:
+                item_name = st.selectbox("3. 아이템 세트/이름", item_name_options)
+
+            c3, c4 = st.columns(2)
+            with c3:
+                starforce = st.number_input("4. 스타포스 수치 (0~30성)", min_value=0, max_value=30, value=17, step=1)
+            with c4:
+                scissors_options = ["제한 없음(교환 가능)"] + [f"{i}회" for i in range(10, -1, -1)]
+                scissors_count = st.selectbox("5. 남은 가위 가능 횟수", scissors_options)
+
+            # 🚀 1. 기획자의 요구사항: 잠재능력 및 에디셔널 드롭다운 추가
+            c7, c8 = st.columns(2)
+            with c7:
+                pot_grade = st.selectbox("6. 윗잠재 등급", ["레전드리", "유니크", "에픽", "레어", "없음"])
+            with c8:
+                add_pot_grade = st.selectbox("7. 에디셔널 등급", ["레전드리", "유니크", "에픽", "레어", "없음"])
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("#### 💰 재화 정보 (단위: 억 메소)")
+            c5, c6 = st.columns(2)
+            with c5:
+                current_meso_eok = st.number_input("현재 보유 메소 (억)", min_value=0.0, value=15.0, step=1.0, format="%.1f")
+            with c6:
+                target_price_eok = st.number_input("목표 아이템 가격 (억)", min_value=0.0, value=100.0, step=1.0, format="%.1f")
+
+            calc_btn = st.button("📊 스펙업 진단 및 계산하기", use_container_width=True, type="primary")
 
         with sim_col2:
             calculator.render_income_calculator()
 
+        # 🚀 2. 핵심 수학 모델 적용 및 분석 로직
         if calc_btn:
             target_price = target_price_eok * 100_000_000
+            current_meso = current_meso_eok * 100_000_000
             
-            if target_price > 0 and target_item_name:
-                weekly_income = st.session_state.get('total_weekly_income', 0)
-                weeks_needed = math.ceil(target_price / weekly_income) if weekly_income > 0 else 0
+            # --- 최소가 보정 로직 (Floor Price) ---
+            pot_min_map = {"레전드리": 16.0, "유니크": 6.0, "에픽": 0.0, "레어": 0.0, "없음": 0.0}
+            add_pot_min_map = {"레전드리": 30.0, "유니크": 13.0, "에픽": 2.0, "레어": 0.0, "없음": 0.0}
+            
+            min_guarantee_eok = pot_min_map.get(pot_grade, 0.0) + add_pot_min_map.get(add_pot_grade, 0.0)
+            min_guarantee_meso = min_guarantee_eok * 100_000_000
 
-                after_equip_trades = trades_left - 1
-                if after_equip_trades <= 0:
-                    recoverable_meso, return_rate = 0, 0.0
-                else:
-                    log_multiplier = math.log10(after_equip_trades + 1) / math.log10(10)
-                    recoverable_meso = target_price * 0.95 * log_multiplier
-                    return_rate = (recoverable_meso / target_price) * 100
+            # --- 가위 횟수 파싱 및 로그스케일 감가상각 공식 ---
+            if "제한 없음" in scissors_count:
+                after_equip_trades = 10 
+                log_multiplier = 1.0
+            else:
+                trades_left = int(scissors_count.replace("회", ""))
+                after_equip_trades = max(0, trades_left - 1) # 장착하면 1회 차감됨
+                log_multiplier = 0.65 + 0.35 * (math.log10(after_equip_trades + 1) / math.log10(11))
+
+            full_item_name = f"{starforce}성 {item_name} {sub_category}"
+            
+            if target_price > 0 and full_item_name:
+                weekly_income = st.session_state.get('total_weekly_income', 0)
+                
+                needed_meso = target_price - current_meso
+                weeks_needed = 0 if needed_meso <= 0 else (math.ceil(needed_meso / weekly_income) if weekly_income > 0 else 0)
+
+                # 최종 회수율 산정
+                base_recoverable = target_price * 0.95 * log_multiplier
+                recoverable_meso = min(max(base_recoverable, min_guarantee_meso), target_price * 0.95)
+                return_rate = (recoverable_meso / target_price) * 100
 
                 st.write("---")
                 st.subheader("💡 AI 스펙업 진단 결과")
                 
                 res_col1, res_col2, res_col3 = st.columns(3)
-                res_col1.metric("⏳ 예상 소요 기간", f"약 {weeks_needed}주" if weeks_needed > 0 else "측정 불가")
+                res_col1.metric("⏳ 예상 소요 기간", f"약 {weeks_needed}주" if weekly_income > 0 else "측정 불가", delta=f"부족한 메소: {needed_meso / 100_000_000:.1f}억" if needed_meso > 0 else "즉시 구매 가능!", delta_color="off")
                 res_col2.metric("📉 예상 회수율", f"{return_rate:.1f}%")
                 res_col3.metric("💰 나중에 되팔 때 금액", f"{recoverable_meso / 100_000_000:.2f}억 메소")
 
+                # 🚀 [추가된 기능] 가위 횟수에 따른 감가상각 변화 그래프 생성
+                if "제한 없음" not in scissors_count and after_equip_trades > 0:
+                    st.markdown("<br>##### 📉 가위 횟수별 예상 회수 금액 변화 (로그 스케일)", unsafe_allow_html=True)
+                    
+                    chart_data = []
+                    # 현재 장착 후 남은 가위 횟수부터 0회까지 가격 변화 추적
+                    for remaining_cuts in range(after_equip_trades, -1, -1):
+                        temp_multiplier = 0.65 + 0.35 * (math.log10(remaining_cuts + 1) / math.log10(11))
+                        temp_base = target_price * 0.95 * temp_multiplier
+                        temp_recoverable = min(max(temp_base, min_guarantee_meso), target_price * 0.95)
+                        
+                        chart_data.append({
+                            "가위 횟수": remaining_cuts,
+                            "예상 회수 금액(억)": round(temp_recoverable / 100_000_000, 2)
+                        })
+                    
+                    if len(chart_data) > 1:
+                        df_chart = pd.DataFrame(chart_data)
+                        
+                        # Altair를 이용한 직관적인 꺾은선 + 영역 그래프 (메이플 감성 레드)
+                        import altair as alt
+                        depreciation_chart = alt.Chart(df_chart).mark_area(
+                            line={'color': '#FF4B4B'}, opacity=0.2, color='#FF4B4B', point={'color': '#FF4B4B', 'size': 50}
+                        ).encode(
+                            # 역순 정렬을 통해 가위 횟수가 줄어드는 흐름을 직관적으로 보여줌
+                            x=alt.X('가위 횟수:O', sort='descending', title='남은 가위 횟수 (회)', axis=alt.Axis(labelAngle=0)),
+                            y=alt.Y('예상 회수 금액(억):Q', title='가치 (억 메소)', scale=alt.Scale(zero=False)),
+                            tooltip=['가위 횟수', '예상 회수 금액(억)']
+                        ).properties(height=220).interactive()
+                        
+                        st.altair_chart(depreciation_chart, use_container_width=True)
+
+                # 세션에 결과 저장
                 st.session_state.last_sim_result = {
-                    "part": target_part, "name": target_item_name, "price": target_price,
-                    "trades": trades_left, "weeks": weeks_needed, "rate": return_rate, "meso": recoverable_meso
+                    "part": sub_category, "name": full_item_name, "price": target_price,
+                    "trades": trades_left if "제한 없음" not in scissors_count else "무제한", 
+                    "weeks": weeks_needed, "rate": return_rate, "meso": recoverable_meso
                 }
             else:
-                st.warning("아이템 이름과 가격을 올바르게 입력해 주세요.")
+                st.warning("아이템 가격을 올바르게 입력해 주세요.")
         
+        # 즐겨찾기 저장 로직
         if st.session_state.get('last_sim_result'):
-            if st.button("⭐ 이 시뮬레이션 결과 즐겨찾기에 저장하기", width="stretch"):
+            if st.button("⭐ 이 시뮬레이션 결과 즐겨찾기에 저장하기", use_container_width=True):
                 res = st.session_state.last_sim_result
                 stats_json = {"expected_weeks": res['weeks'], "return_rate": res['rate'], "recoverable_meso": res['meso']}
                 

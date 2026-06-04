@@ -97,3 +97,30 @@ def get_starforce_expected_cost(equip_level, start_star, end_star, safeguard, ev
     except Exception as e:
         print(f"스타포스 기댓값 DB 조회 오류: {e}")
         return 0
+    
+# --- db_utils.py 맨 아래에 추가해 주세요 ---
+
+def get_user_by_nickname(character_name):
+    """
+    캐릭터 닉네임으로 DB에서 캐싱된 데이터를 불러옵니다.
+    새로운 테이블 구조에 맞춰 characters와 users 테이블을 조인하여 가져옵니다.
+    """
+    response = supabase.table('characters').select('*, users(api_key)').eq('character_name', character_name).execute()
+    
+    if response.data:
+        data = response.data[0]
+        # app.py와의 기존 코드 호환성을 위해 조인된 api_key 값을 밖으로 꺼내줍니다.
+        if data.get('users'):
+            data['api_key'] = data['users'].get('api_key')
+        return data
+    return None
+
+def upsert_user_cache(api_key, character_name, stats_data, equip_data):
+    """
+    app.py에서 호출하는 기존 함수명과의 호환성을 유지하기 위한 브릿지 함수입니다.
+    """
+    # 1. API 키를 통해 유저 고유 ID(user_id)를 가져오거나 생성합니다.
+    user_id = get_or_create_user(api_key)
+    
+    # 2. 해당 유저 ID를 기반으로 캐릭터 데이터를 업데이트(Upsert) 합니다.
+    return upsert_character_cache(user_id, character_name, stats_data, equip_data)
