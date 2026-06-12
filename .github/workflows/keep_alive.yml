@@ -1,0 +1,35 @@
+# .github/workflows/keep_alive.yml
+name: Supabase Keep Alive Ping
+
+on:
+  schedule:
+    # 🚀 크론(Cron) 표현식: 3일에 한 번씩 매월 00:00(UTC 기준, 한국 오전 9시)에 실행
+    - cron: '0 0 */3 * *'
+  
+  # 🚀 수동 실행 버튼: GitHub 페이지에서 원할 때 언제든 직접 클릭해서 테스트할 수 있게 해줍니다.
+  workflow_dispatch:
+
+jobs:
+  ping-db:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 1. 저장소 코드 불러오기
+      uses: actions/checkout@v3
+
+    - name: 2. 파이썬 환경 세팅
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 3. 필요 패키지(Supabase) 설치
+      run: |
+        python -m pip install --upgrade pip
+        pip install supabase
+
+    - name: 4. DB Ping 스크립트 실행
+      env:
+        # GitHub Secrets에 등록한 키를 파이썬 os.environ으로 넘겨줍니다.
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      run: python ping_db.py
