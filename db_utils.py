@@ -124,3 +124,15 @@ def upsert_user_cache(api_key, character_name, stats_data, equip_data):
     
     # 2. 해당 유저 ID를 기반으로 캐릭터 데이터를 업데이트(Upsert) 합니다.
     return upsert_character_cache(user_id, character_name, stats_data, equip_data)
+
+def delete_favorite_item(target_id):
+    """
+    보관함(favorite_items)에서 특정 아이템을 삭제합니다.
+    """
+    try:
+        # 🚀 'id' 대신 'item_id' (또는 기획자님이 Supabase에 만든 기본키 이름)으로 변경!
+        response = supabase.table('favorite_items').delete().eq('favorite_id', target_id).execute()
+        return True
+    except Exception as e:
+        print(f"❌ 아이템 삭제 실패: {e}")
+        return False

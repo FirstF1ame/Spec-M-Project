@@ -558,23 +558,23 @@ if st.session_state.char_data:
             item_name_options = []
 
             if main_category == "방어구":
-                sub_category_options = ["모자", "상의", "하의", "한벌옷", "신발", "장갑", "망토", "어깨장식(견장)"]
-                item_name_options = ["앱솔랩스", "아케인셰이드", "에테르넬", "카루타(루타비스)", "여명"]
+                sub_category_options = ["모자", "상의", "하의", "한벌옷", "신발", "장갑", "망토", "어깨장식"]
+                item_name_options = ["카루타", "앱솔랩스", "아케인셰이드", "에테르넬", "기타"]
             elif main_category == "장신구":
                 sub_category_options = ["반지", "펜던트", "얼굴장식", "눈장식", "귀고리", "벨트"]
-                item_name_options = ["보스 장신구", "여명의 보스 장신구", "칠흑의 보스 장신구", "마이스터", "이벤트 링"]
+                item_name_options = ["보스 세트", "여명 세트", "칠흑 세트", "마이스터", "이벤트 링"]
             elif main_category == "무기":
                 sub_category_options = ["무기"]
                 item_name_options = ["앱솔랩스", "아케인셰이드", "제네시스", "파프니르"]
             elif main_category == "보조무기":
                 sub_category_options = ["보조무기"]
-                item_name_options = ["블랙", "은빛", "루인 포스실드", "기타 보조무기"]
+                item_name_options = ["블랙", "트레져", "일반", "루인 포스실드", "기타"]
             elif main_category == "엠블렘":
                 sub_category_options = ["엠블렘"]
-                item_name_options = ["골드", "미트라", "기타 엠블렘"]
+                item_name_options = ["일반", "미트라", "노바"]
             elif main_category == "기계 심장":
                 sub_category_options = ["기계 심장"]
-                item_name_options = ["페어리 하트", "티타늄 하트", "블랙 하트", "리튬 하트"]
+                item_name_options = ["페어리 하트", "티타늄 하트", "블랙 하트", "리튬 하트", "컴플리트 언더컨트롤 하트"]
 
             c1, c2 = st.columns(2)
             with c1:
@@ -683,71 +683,148 @@ if st.session_state.char_data:
                         
                         st.altair_chart(depreciation_chart, use_container_width=True)
 
-                # 세션에 결과 저장
+                # 🚀 수정된 부분: "무제한"이라는 글자 대신, DB가 이해할 수 있는 숫자(-1)로 저장합니다.
                 st.session_state.last_sim_result = {
-                    "part": sub_category, "name": full_item_name, "price": target_price,
-                    "trades": trades_left if "제한 없음" not in scissors_count else "무제한", 
-                    "weeks": weeks_needed, "rate": return_rate, "meso": recoverable_meso
+                    "part": sub_category, 
+                    "name": full_item_name, 
+                    "price": int(target_price),
+                    # 👇 기존의 "무제한" 글자를 지우고 -1 로 변경해 주세요!
+                    "trades": trades_left if "제한 없음" not in scissors_count else -1, 
+                    "weeks": weeks_needed, 
+                    "rate": return_rate, 
+                    "meso": int(recoverable_meso)
                 }
             else:
                 st.warning("아이템 가격을 올바르게 입력해 주세요.")
         
-        # 즐겨찾기 저장 로직
+        # 🚀 3. 즐겨찾기 저장 로직 완벽 수정 (DB 조회 연동)
         if st.session_state.get('last_sim_result'):
             if st.button("⭐ 이 시뮬레이션 결과 즐겨찾기에 저장하기", use_container_width=True):
                 res = st.session_state.last_sim_result
                 stats_json = {"expected_weeks": res['weeks'], "return_rate": res['rate'], "recoverable_meso": res['meso']}
                 
-                char_id = st.session_state.get('character_id')
-                if char_id:
-                    db_utils.save_favorite_item(char_id, res['part'], res['name'], res['price'], res['trades'], stats_json)
-                    st.success(f"✅ '{res['name']}'이(가) 즐겨찾기에 안전하게 저장되었습니다!")
-                    st.session_state.last_sim_result = None 
+                # 세션에 저장된 현재 캐릭터 닉네임을 가져옵니다.
+                char_data = st.session_state.get('char_data', {})
+                char_name = char_data.get('name')
+                
+                if char_name:
+                    # 닉네임으로 DB를 찔러서 해당 캐릭터의 정확한 고유 ID를 가져옵니다.
+                    db_char = db_utils.get_user_by_nickname(char_name)
+                    char_id = db_char.get('id') or db_char.get('character_id')
+                    
+                    if char_id:
+                        db_utils.save_favorite_item(char_id, res['part'], res['name'], res['price'], res['trades'], stats_json)
+                        st.success(f"✅ '{res['name']}'이(가) 보관함에 안전하게 저장되었습니다! (DB 연동 완료)")
+                        st.session_state.last_sim_result = None 
+                    else:
+                        st.error("DB에서 캐릭터 고유 식별자를 찾을 수 없습니다.")
                 else:
-                    st.error("캐릭터 정보가 만료되었습니다. 다시 조회해 주세요.")
+                    st.error("캐릭터 정보가 없습니다. 메인 화면에서 닉네임을 먼저 검색해 주세요.")
                     
         st.write("")
         st.divider()
         calculator.render_starforce_simulator()
 
     # =========================================================
-    # [뷰 3] 즐겨찾기 보관함 화면
+    # [뷰 3] 보관함 화면 
     # =========================================================
     elif st.session_state.current_view == 'favorites':
-        st.subheader("⭐ 스펙업 가성비 보관함")
-        st.markdown("저장해둔 시뮬레이션 결과를 모아보고, 어떤 아이템을 먼저 구매하는 것이 **가장 이득(가성비)**인지 비교해 보세요.")
+        st.header("⭐ 스펙업 보관함")
+        st.markdown("시뮬레이터에서 찜해둔 아이템들을 비교하고 가장 효율적인 스펙업 경로를 결정하세요.")
         
-        char_id = st.session_state.get('character_id')
+        char_data = st.session_state.get('char_data', {})
+        char_name = char_data.get('name')
         
-        if char_id:
+        char_id = None
+        if char_name:
+            db_char = db_utils.get_user_by_nickname(char_name)
+            if db_char:
+                char_id = db_char.get('id') or db_char.get('character_id')
+
+        if not char_id:
+            st.error("캐릭터 정보를 찾을 수 없습니다. 메인 화면에서 닉네임을 먼저 검색해 주세요.")
+        else:
+            # DB에서 최신 즐겨찾기 목록 다시 불러오기
             favorites = db_utils.get_favorite_items(char_id)
             
             if not favorites:
-                st.info("💡 아직 저장된 즐겨찾기가 없습니다. 시뮬레이터에서 찜하고 싶은 아이템을 먼저 저장해 보세요!")
+                st.info("텅~ 보관함이 비어있습니다. 시뮬레이터 탭에서 고민되는 아이템을 진단하고 저장해 보세요!")
             else:
-                df_fav = pd.DataFrame(favorites)
-                df_fav['expected_weeks'] = df_fav['stats_json'].apply(lambda x: x.get('expected_weeks', 0))
-                df_fav['return_rate'] = df_fav['stats_json'].apply(lambda x: x.get('return_rate', 0.0))
+                st.success(f"✅ {char_name}님의 보관함에 총 {len(favorites)}개의 아이템이 있습니다.")
+                st.write("---")
                 
-                sort_option = st.radio("어떤 기준으로 아이템을 비교할까요?", 
-                    ["📉 회수율이 높은 순서 (되팔 때 이득)", "⏳ 소요 주차가 짧은 순서 (빠른 스펙업)", "💰 가격이 저렴한 순서"], horizontal=True)
+                import pandas as pd
+                import numpy as np
+                
+                df_data = []
+                for item in favorites:
+                    stats = item.get('stats_json', {})
+                    df_data.append({
+                        "DB_ID": item.get('favorite_id'), 
+                        "부위": item.get('part'),
+                        "아이템명": item.get('item_name'),
+                        "가격 (억)": item.get('target_price', 0) / 100_000_000,
+                        "소요 주차 (주)": stats.get('expected_weeks', 0),
+                        "회수율 (%)": stats.get('return_rate', 0.0),
+                        "회수 금액 (억)": stats.get('recoverable_meso', 0) / 100_000_000,
+                        "가위 횟수": "무제한" if item.get('trades_left') == -1 else f"{item.get('trades_left')}회"
+                    })
+                
+                df = pd.DataFrame(df_data)
+                
+                # 📊 정렬 기준 UI
+                sort_option = st.radio("📊 정렬 기준 선택", ["최신순 (기본)", "📈 회수율 높은 순", "⏳ 소요 주차 짧은 순", "💰 가격 낮은 순"], horizontal=True)
+                
+                if sort_option == "📈 회수율 높은 순":
+                    df = df.sort_values(by="회수율 (%)", ascending=False)
+                elif sort_option == "⏳ 소요 주차 짧은 순":
+                    df = df.sort_values(by="소요 주차 (주)", ascending=True)
+                elif sort_option == "💰 가격 낮은 순":
+                    df = df.sort_values(by="가격 (억)", ascending=True)
+
+                # 🚀 3. 기획자 요구사항: 회수율이 낮을수록 붉은 배경을 채우는 그라데이션 함수 정의
+                def color_low_return_rate(val):
+                    try:
+                        # % 기호나 텍스트가 있을 수 있으므로 숫자만 추출
+                        numeric_val = float(str(val).replace('%', ''))
+                        # 100% 면 투명(0), 0% 면 완전 붉은색(1)이 되도록 투명도(Alpha) 계산
+                        alpha = max(0.0, min(1.0, (100.0 - numeric_val) / 100.0))
+                        
+                        # 0%에 가까워질수록 투명도가 올라가며 점점 더 붉어집니다 (경고 UX)
+                        if alpha > 0.05:
+                            return f'background-color: rgba(255, 75, 75, {alpha * 0.4}); color: #fff;'
+                        return ''
+                    except:
+                        return ''
+
+                # 표 스타일링 적용 (DB_ID 컬럼은 유저에게 보여주지 않기 위해 드랍)
+                display_df = df.drop(columns=["DB_ID"])
+                
+                # 포맷팅 조립 및 회수율 열에만 '붉은 경고 색상' 함수 매핑
+                styled_df = display_df.style.format({
+                    "가격 (억)": "{:,.1f}",
+                    "회수율 (%)": "{:.1f}%",
+                    "회수 금액 (억)": "{:,.2f}"
+                }).map(color_low_return_rate, subset=['회수율 (%)'])
+
+                # 화면에 예쁜 테이블 출력
+                st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                
+                # 🚀 4. 기획자 요구사항: 저장된 아이템 개별 삭제 기능 구현
                 st.write("")
+                st.markdown("##### 🗑️ 보관함 아이템 삭제 관리")
+                st.caption("삭제하고 싶은 아이템을 선택한 뒤 버튼을 누르면 DB에서 즉시 제거됩니다.")
                 
-                if sort_option == "📉 회수율이 높은 순서 (되팔 때 이득)":
-                    df_fav = df_fav.sort_values(by='return_rate', ascending=False)
-                elif sort_option == "⏳ 소요 주차가 짧은 순서 (빠른 스펙업)":
-                    df_fav = df_fav.sort_values(by='expected_weeks', ascending=True)
-                else:
-                    df_fav = df_fav.sort_values(by='price', ascending=True)
+                # 삭제 선택을 위한 셀렉트 박스 (유저가 알아보기 쉽게 이름 조합)
+                delete_options = {f"[{row['부위']}] {row['아이템명']} ({row['가격 (억)']}억)": row['DB_ID'] for _, row in df.iterrows()}
+                selected_item_text = st.selectbox("삭제할 아이템 선택", list(delete_options.keys()), label_visibility="collapsed")
                 
-                for idx, row in df_fav.iterrows():
-                    with st.container():
-                        st.markdown(f"#### [{row['part']}] {row['item_name']}")
-                        col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("경매장 가격", f"{row['price'] / 100_000_000:.2f}억 메소")
-                        col2.metric("남은 가위 횟수", f"{row['trade_count_left']}회")
-                        col3.metric("예상 소요 기간", f"약 {row['expected_weeks']}주")
-                        col4.metric("로그스케일 예상 회수율", f"{row['return_rate']:.1f}%", delta="가성비 지표", delta_color="off")
-                        st.divider()
-        else:
-            st.error("캐릭터 정보가 만료되었습니다. 다시 조회해 주세요.")
+                del_col1, del_col2 = st.columns([1, 4])
+                with del_col1:
+                    if st.button("❌ 선택 삭제", use_container_width=True, type="secondary"):
+                        target_db_id = delete_options[selected_item_text]
+                        if db_utils.delete_favorite_item(target_db_id):
+                            st.success("보관함에서 성공적으로 삭제되었습니다!")
+                            st.rerun() # 🚀 중요: 삭제 후 화면을 즉시 새로고침하여 반영합니다.
+                        else:
+                            st.error("삭제 중 오류가 발생했습니다.")
