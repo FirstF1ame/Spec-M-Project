@@ -19,7 +19,7 @@ if not url or not key:
 
 try:
     supabase: Client = create_client(url, key)
-    response = supabase.table('characters').select('id').limit(1).execute()
+    response = supabase.table('characters').select('character_name').limit(1).execute()
     print(f"✅ Supabase DB Ping 성공! (응답 데이터: {response.data})")
 except Exception as e:
     print(f"❌ DB Ping 실패: {e}")
